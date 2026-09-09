@@ -1,20 +1,19 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { booking, classSession } from "@/db/schema";
+import { booking, classSession, classTemplate } from "@/db/schema";
 
 /**
  * Booking a class.
  *
- * ⚠️ The capacity check here is **knowingly racy**, and left that way on
- * purpose. It counts, then inserts, with nothing between the two — so two
- * people booking the last spot at the same moment both see space and both get
- * in. This is the most common way this feature is written, it passes every
- * single-user test, and it fails exactly once the studio gets popular.
+ * The capacity check runs inside a transaction that takes the session's row
+ * lock first. Every booking for a session has to pass through that one lock,
+ * so a second attempt cannot count seats until the first has committed and
+ * its booking is visible — count and insert can no longer interleave.
  *
- * It is the first real task in the README: fix the overbooking race. Doing it
- * properly needs a decision about *how* — a transaction with a row lock, or a
- * database constraint — which is the kind of decision worth a human seeing.
+ * The lock lives on `class_session` rather than on the bookings, because the
+ * session row is the thing everyone is contending for; a constraint on the
+ * bookings could not express "at most N per session" without a counter table.
  */
 
 export type BookResult =
@@ -44,36 +43,59 @@ export async function bookClass(
   sessionId: string,
   memberId: string
 ): Promise<BookResult> {
-  const capacity = await capacityFor(sessionId);
-  if (!capacity) {
-    return { ok: false, reason: "cancelled" };
-  }
-  if (capacity.session.status === "cancelled") {
-    return { ok: false, reason: "cancelled" };
-  }
+  return db.transaction(async (tx): Promise<BookResult> => {
+    // Serialise bookings for this session: concurrent attempts queue here
+    // until the one ahead of them commits, so the count below is taken
+    // against a seat count that cannot change under us.
+    const [session] = await tx
+      .select()
+      .from(classSession)
+      .where(eq(classSession.id, sessionId))
+      .for("update");
+    if (!session || session.status === "cancelled") {
+      return { ok: false, reason: "cancelled" };
+    }
 
-  const mine = capacity.session.bookings.find(
-    (row) => row.memberId === memberId && row.status !== "cancelled"
-  );
-  if (mine) {
-    return { ok: false, reason: "already_booked" };
-  }
+    let limit = session.capacity;
+    if (limit === null) {
+      const [template] = await tx
+        .select({ capacity: classTemplate.capacity })
+        .from(classTemplate)
+        .where(eq(classTemplate.id, session.templateId));
+      if (!template) {
+        return { ok: false, reason: "cancelled" };
+      }
+      limit = template.capacity;
+    }
 
-  // Here is the race. Nothing holds the count still while we insert.
-  if (capacity.remaining <= 0) {
-    return { ok: false, reason: "full" };
-  }
+    const rows = await tx
+      .select({ memberId: booking.memberId, status: booking.status })
+      .from(booking)
+      .where(eq(booking.sessionId, sessionId));
 
-  const id = newId("bkg");
-  await db
-    .insert(booking)
-    .values({ id, memberId, sessionId, status: "booked" })
-    .onConflictDoUpdate({
-      set: { cancelledAt: null, status: "booked" },
-      target: [booking.sessionId, booking.memberId],
-    });
+    const mine = rows.find(
+      (row) => row.memberId === memberId && row.status !== "cancelled"
+    );
+    if (mine) {
+      return { ok: false, reason: "already_booked" };
+    }
 
-  return { bookingId: id, ok: true };
+    const taken = rows.filter((row) => row.status !== "cancelled").length;
+    if (taken >= limit) {
+      return { ok: false, reason: "full" };
+    }
+
+    const id = newId("bkg");
+    await tx
+      .insert(booking)
+      .values({ id, memberId, sessionId, status: "booked" })
+      .onConflictDoUpdate({
+        set: { cancelledAt: null, status: "booked" },
+        target: [booking.sessionId, booking.memberId],
+      });
+
+    return { bookingId: id, ok: true };
+  });
 }
 
 /**
