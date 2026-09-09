@@ -136,8 +136,8 @@ async function run() {
   log(`Inserting ${bookings.length} bookings…`);
   await db.insert(booking).values(bookings);
 
-  log("\nSeeded. Reformer Pilates is at 7 of 8 — book the last spot twice at");
-  log("the same moment and you will get two bookings. That is task 1.");
+  log("\nSeeded. Reformer Pilates is at 7 of 8 — one spot left, because that");
+  log("is where the interesting behaviour is.");
   process.exit(0);
 }
 

@@ -7,8 +7,9 @@ Class booking for a small studio. Next.js, Drizzle, Postgres, shadcn/ui.
 > a feature and a human approved the risky part" is something you can watch
 > rather than something you're told.
 >
-> It is therefore deliberately unfinished, and one part of it is deliberately
-> broken. Both are documented below rather than hidden.
+> It is therefore deliberately unfinished, and the one part that was
+> deliberately broken — the overbooking race — is documented below alongside
+> its fix.
 
 ## Running it
 
@@ -38,14 +39,13 @@ that is where the interesting behaviour is.
 `class_session.capacity` is nullable and falls back to the template's, because a
 studio moves one class into a smaller room without redefining the class.
 
-## The bug that is there on purpose
+## The overbooking race, fixed
 
-`src/lib/bookings.ts` counts bookings and then inserts, with nothing in between.
-Two people going for the last spot both see space and both get in.
-
-It is the most common way this feature gets written, it passes every
-single-user test, and it fails the moment the studio gets popular. Measured, on
-a session with capacity forced to 1:
+The first task here: `src/lib/bookings.ts` used to count bookings and then
+insert, with nothing in between, so two people going for the last spot both
+saw space and both got in. It is the most common way this feature gets
+written, it passes every single-user test, and it fails the moment the studio
+gets popular. Measured, on a session with capacity forced to 1:
 
 ```
 capacity 1 · concurrent attempts: 6
@@ -53,12 +53,21 @@ accepted : 6
 rejected : none
 ```
 
-Six people in a one-person class. Fixing it needs a *decision* — a transaction
-with `SELECT … FOR UPDATE`, or a database constraint that makes overbooking
-impossible — and that decision is worth a person seeing, which is the point.
+Six people in a one-person class. Fixing it needed a *decision* — a
+transaction with `SELECT … FOR UPDATE`, or a database constraint that makes
+overbooking impossible — and that decision is worth a person seeing, which is
+the point. The decision made: the transaction. `bookClass` now takes
+`SELECT … FOR UPDATE` on the session's own row before it reads anything, so
+concurrent bookings for one class queue behind each other, and each one counts
+against a state that cannot move until it commits. No migration was needed;
+under the same worst-case interleaving that used to land two bookings in a
+one-seat class, the second attempt now gets `full`.
 
-The one thing that *is* enforced is `booking_member_session_idx`: nobody can
-book the same class twice, whatever the race.
+The trade: the guarantee holds for writers that go through `bookClass`, not
+for every possible writer — the constraint route would have closed that too,
+at the cost of a migration. The one thing the schema *does* enforce on its own
+is `booking_member_session_idx`: nobody can book the same class twice,
+whatever the race.
 
 ## What is missing, on purpose
 
@@ -66,7 +75,6 @@ Each of these is a different *kind* of change, which is why they were left out.
 
 | Task | Why it is interesting |
 | --- | --- |
-| **Fix the overbooking race** | a decision about how, and a migration if you choose the constraint |
 | **Waitlists** | schema migration plus non-trivial promotion logic when someone cancels |
 | **A cancellation window** | pure business rule, no schema change — the boring, safe kind |
 | **Class packs / credits** | migration, and it touches money |
