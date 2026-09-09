@@ -1,69 +1,108 @@
-import Image from "next/image";
+import { asc, gte } from "drizzle-orm";
 
-export default function Home() {
+import { BookButton } from "@/components/book-button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { db } from "@/db";
+import { classSession } from "@/db/schema";
+
+/** The timetable. Everything a member does starts here. */
+export const dynamic = "force-dynamic";
+
+const DAY = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  weekday: "long",
+});
+const TIME = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+export default async function SchedulePage() {
+  const sessions = await db.query.classSession.findMany({
+    orderBy: [asc(classSession.startsAt)],
+    where: gte(classSession.startsAt, new Date()),
+    with: {
+      bookings: true,
+      template: { with: { instructor: true } },
+    },
+  });
+
+  const byDay = new Map<string, typeof sessions>();
+  for (const session of sessions) {
+    const key = DAY.format(session.startsAt);
+    byDay.set(key, [...(byDay.get(key) ?? []), session]);
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="mx-auto max-w-3xl px-6 py-12">
+      <header className="mb-10">
+        <h1 className="text-3xl font-semibold tracking-tight">Cadence</h1>
+        <p className="mt-1 text-muted-foreground">
+          This week at the studio. Classes open two weeks ahead.
+        </p>
+      </header>
+
+      <div className="space-y-8">
+        {[...byDay.entries()].map(([day, entries]) => (
+          <section key={day}>
+            <h2 className="mb-3 text-sm font-medium text-muted-foreground">
+              {day}
+            </h2>
+            <div className="space-y-2">
+              {entries.map((session) => {
+                const limit = session.capacity ?? session.template.capacity;
+                const taken = session.bookings.filter(
+                  (row) => row.status !== "cancelled"
+                ).length;
+                const remaining = limit - taken;
+
+                return (
+                  <Card key={session.id}>
+                    <CardHeader className="pb-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="font-mono text-sm tabular-nums text-muted-foreground">
+                          {TIME.format(session.startsAt)}
+                        </span>
+                        <CardTitle className="text-base">
+                          {session.template.name}
+                        </CardTitle>
+                        {remaining <= 0 ? (
+                          <Badge variant="destructive">Full</Badge>
+                        ) : (
+                          <Badge variant="secondary">
+                            {remaining} of {limit} left
+                          </Badge>
+                        )}
+                      </div>
+                    </CardHeader>
+                    <CardContent className="flex flex-wrap items-end justify-between gap-4 pt-0">
+                      <div className="max-w-lg">
+                        <p className="text-sm">{session.template.description}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {session.template.instructor?.name ?? "TBC"} ·{" "}
+                          {session.template.durationMinutes} min
+                        </p>
+                      </div>
+                      <BookButton
+                        full={remaining <= 0}
+                        sessionId={session.id}
+                      />
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+
+        {sessions.length === 0 ? (
+          <p className="text-muted-foreground">
+            No classes on the timetable. Run <code>bun run db:seed</code>.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        ) : null}
+      </div>
+    </main>
   );
 }

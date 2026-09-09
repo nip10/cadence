@@ -1,36 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cadence
 
-## Getting Started
+Class booking for a small studio. Next.js, Drizzle, Postgres, shadcn/ui.
 
-First, run the development server:
+> This app exists to be **worked on**. It is the target for an agent pipeline —
+> a real repo, with real migrations and a real deploy, so that "an agent shipped
+> a feature and a human approved the risky part" is something you can watch
+> rather than something you're told.
+>
+> It is therefore deliberately unfinished, and one part of it is deliberately
+> broken. Both are documented below rather than hidden.
+
+## Running it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
+bun run db:start          # Postgres 18 on port 5433
+cp .env.example .env.local
+bun run db:push
+bun run db:seed
+bun run dev               # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The seed builds a week of timetable across three slots a real studio sells —
+07:00, 12:15 and 18:30 — and leaves **Reformer Pilates at 7 of 8**, because
+that is where the interesting behaviour is.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## The model
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Table | What it is |
+| --- | --- |
+| `instructor` | who teaches |
+| `class_template` | a class as it appears on the timetable, before it has a date |
+| `class_session` | one class, at one time, that people can book |
+| `member` | who books |
+| `booking` | a member on a session, with a status |
 
-## Learn More
+`class_session.capacity` is nullable and falls back to the template's, because a
+studio moves one class into a smaller room without redefining the class.
 
-To learn more about Next.js, take a look at the following resources:
+## The bug that is there on purpose
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`src/lib/bookings.ts` counts bookings and then inserts, with nothing in between.
+Two people going for the last spot both see space and both get in.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+It is the most common way this feature gets written, it passes every
+single-user test, and it fails the moment the studio gets popular. Measured, on
+a session with capacity forced to 1:
 
-## Deploy on Vercel
+```
+capacity 1 · concurrent attempts: 6
+accepted : 6
+rejected : none
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Six people in a one-person class. Fixing it needs a *decision* — a transaction
+with `SELECT … FOR UPDATE`, or a database constraint that makes overbooking
+impossible — and that decision is worth a person seeing, which is the point.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The one thing that *is* enforced is `booking_member_session_idx`: nobody can
+book the same class twice, whatever the race.
+
+## What is missing, on purpose
+
+Each of these is a different *kind* of change, which is why they were left out.
+
+| Task | Why it is interesting |
+| --- | --- |
+| **Fix the overbooking race** | a decision about how, and a migration if you choose the constraint |
+| **Waitlists** | schema migration plus non-trivial promotion logic when someone cancels |
+| **A cancellation window** | pure business rule, no schema change — the boring, safe kind |
+| **Class packs / credits** | migration, and it touches money |
+| **Real auth** | every booking is currently made as `mbr_iris` |
+| **Admin: edit the timetable** | CRUD, and the first thing with a design surface worth reviewing |
+| **Bump a dependency** | the change that looks safest and historically is not |
+
+## Deploying
+
+Vercel, with Supabase for Postgres. Set `DATABASE_URL` to the Supabase
+**connection pooling** URI — the client sets `prepare: false`, which is what
+that pooler needs.
+
+Preview deploys per branch are the durable review surface: one immutable URL per
+commit, which outlives the machine the work was done on.
+
+## Scripts
+
+```
+bun run dev          bun run build        bun run start
+bun run db:start     bun run db:stop      bun run db:push
+bun run db:generate  bun run db:migrate   bun run db:seed
+```
