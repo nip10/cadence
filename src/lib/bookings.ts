@@ -1,20 +1,17 @@
-import { and, eq } from "drizzle-orm";
+import { and, count, eq, ne } from "drizzle-orm";
 
 import { db } from "@/db";
-import { booking, classSession } from "@/db/schema";
+import { booking, classSession, classTemplate } from "@/db/schema";
 
 /**
  * Booking a class.
  *
- * ⚠️ The capacity check here is **knowingly racy**, and left that way on
- * purpose. It counts, then inserts, with nothing between the two — so two
- * people booking the last spot at the same moment both see space and both get
- * in. This is the most common way this feature is written, it passes every
- * single-user test, and it fails exactly once the studio gets popular.
- *
- * It is the first real task in the README: fix the overbooking race. Doing it
- * properly needs a decision about *how* — a transaction with a row lock, or a
- * database constraint — which is the kind of decision worth a human seeing.
+ * The capacity check and the insert happen inside one transaction, and the
+ * session row is locked `FOR UPDATE` before anything is counted. Two people
+ * going for the last spot therefore queue on that row: the second one waits
+ * for the first to commit, then re-counts and sees a full class. The old
+ * version counted, then inserted, with nothing holding the count still in
+ * between — so both bookings could land.
  */
 
 export type BookResult =
@@ -44,36 +41,65 @@ export async function bookClass(
   sessionId: string,
   memberId: string
 ): Promise<BookResult> {
-  const capacity = await capacityFor(sessionId);
-  if (!capacity) {
-    return { ok: false, reason: "cancelled" };
-  }
-  if (capacity.session.status === "cancelled") {
-    return { ok: false, reason: "cancelled" };
-  }
+  return db.transaction(async (tx): Promise<BookResult> => {
+    // The lock is the fix: concurrent bookings for this class queue on the
+    // session row, so the count below is taken only after earlier inserts
+    // have committed. `of` keeps the lock on the session row alone.
+    const [session] = await tx
+      .select({
+        status: classSession.status,
+        capacity: classSession.capacity,
+        templateCapacity: classTemplate.capacity,
+      })
+      .from(classSession)
+      .innerJoin(classTemplate, eq(classSession.templateId, classTemplate.id))
+      .where(eq(classSession.id, sessionId))
+      .for("update", { of: classSession });
 
-  const mine = capacity.session.bookings.find(
-    (row) => row.memberId === memberId && row.status !== "cancelled"
-  );
-  if (mine) {
-    return { ok: false, reason: "already_booked" };
-  }
+    if (!session) {
+      return { ok: false, reason: "cancelled" };
+    }
+    if (session.status === "cancelled") {
+      return { ok: false, reason: "cancelled" };
+    }
 
-  // Here is the race. Nothing holds the count still while we insert.
-  if (capacity.remaining <= 0) {
-    return { ok: false, reason: "full" };
-  }
+    const mine = await tx
+      .select({ id: booking.id })
+      .from(booking)
+      .where(
+        and(
+          eq(booking.sessionId, sessionId),
+          eq(booking.memberId, memberId),
+          ne(booking.status, "cancelled")
+        )
+      )
+      .limit(1);
+    if (mine.length > 0) {
+      return { ok: false, reason: "already_booked" };
+    }
 
-  const id = newId("bkg");
-  await db
-    .insert(booking)
-    .values({ id, memberId, sessionId, status: "booked" })
-    .onConflictDoUpdate({
-      set: { cancelledAt: null, status: "booked" },
-      target: [booking.sessionId, booking.memberId],
-    });
+    const limit = session.capacity ?? session.templateCapacity;
+    const [{ taken }] = await tx
+      .select({ taken: count() })
+      .from(booking)
+      .where(
+        and(eq(booking.sessionId, sessionId), ne(booking.status, "cancelled"))
+      );
+    if (taken >= limit) {
+      return { ok: false, reason: "full" };
+    }
 
-  return { bookingId: id, ok: true };
+    const id = newId("bkg");
+    await tx
+      .insert(booking)
+      .values({ id, memberId, sessionId, status: "booked" })
+      .onConflictDoUpdate({
+        set: { cancelledAt: null, status: "booked" },
+        target: [booking.sessionId, booking.memberId],
+      });
+
+    return { bookingId: id, ok: true };
+  });
 }
 
 /**
