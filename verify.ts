@@ -17,10 +17,17 @@ const members = ["mbr_sam","mbr_noor","mbr_leo","mbr_ada","mbr_ben","mbr_cleo"];
 const results = await Promise.all(members.map((m) => bookClass(SESSION, m)));
 console.log(`attempts : ${members.length}`);
 console.log(`accepted : ${results.filter((r) => r.ok).length}`);
-console.log(`rejected : ${results.filter((r) => !r.ok).map((r: any) => r.reason).join(", ") || "none"}`);
+const rejected = results.filter((r) => !r.ok);
+console.log(`rejected : ${rejected.map((r) => r.reason).join(", ") || "none"}`);
 
 const [after] = await sql`select count(*)::int as n from booking where session_id = ${SESSION} and status <> 'cancelled'`;
 console.log(`in db    : ${after.n}`);
-console.log(after.n === 1 ? "\nPASS — one spot, one booking." : `\nFAIL — capacity 1 holds ${after.n} bookings.`);
+
+const passed = after.n === 1;
+console.log(passed ? "\nPASS — one spot, one booking." : `\nFAIL — capacity 1 holds ${after.n} bookings.`);
 await sql.end();
-process.exit(0);
+
+// The exit code is the verdict. This used to be an unconditional `exit(0)`,
+// which meant anything running this as a check — CI, a pipeline stage — saw a
+// pass while the script printed FAIL. A check that cannot fail is not a check.
+process.exit(passed ? 0 : 1);
