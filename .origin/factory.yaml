@@ -1,0 +1,47 @@
+# Cadence's delivery pipelines, read by Origin at the commit a run starts from.
+#
+# This file is the authority: Origin keeps a copy of what it resolved, and its
+# editor refuses to change a pipeline defined here. Change it in a pull
+# request like any other code. Harnesses and models are named from Origin's
+# deployment policy; a stage with no model runs its harness's default.
+apiVersion: origin.dev/v1alpha1
+kind: Pipeline
+metadata:
+  name: builders
+spec:
+  title: Builders
+  description: Implement, then review. Review can send the work back twice before the run gives up.
+  stages:
+    - key: implement
+      name: Implement
+      kind: implement
+      description: Make the change. Run the tests. Do not commit or push — the machine has no credentials and the patch is collected for you.
+      harness: opencode
+      effort: medium
+      maxRetries: 3
+      timeout: 25m
+    - key: checks
+      name: Checks
+      kind: test
+      description: Type-check the working tree. No model, no opinion, no bill — and a reviewer that never spends a paragraph on a missing import.
+      shell: bunx tsc --noEmit && bun run lint
+      timeout: 10m
+    - key: verify
+      name: Verify
+      kind: test
+      description: Runs the overbooking smoke test against the task database and keeps the output. A reviewer confirms rather than investigates.
+      shell: mkdir -p $HOME/.origin/artifacts && bun --env-file=.env.local run verify.ts 2>&1 | tee $HOME/.origin/artifacts/verify.log
+      timeout: 10m
+    - key: review
+      name: Review
+      kind: review
+      description: Review the working tree against the task. Check correctness and concurrency, not style.
+      harness: codex
+      timeout: 15m
+  edges:
+    - { from: implement, to: checks, on: success }
+    - { from: checks, to: verify, on: success }
+    - { from: verify, to: review, on: success }
+    - { from: review, to: implement, on: findings, label: up to 3 more goes }
+    - { from: verify, to: implement, on: findings, label: does not work }
+    - { from: checks, to: implement, on: findings, label: does not compile }
