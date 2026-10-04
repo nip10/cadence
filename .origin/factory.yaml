@@ -16,7 +16,7 @@ spec:
       name: Implement
       kind: implement
       description: Make the change. Run the tests. Do not commit or push — the machine has no credentials and the patch is collected for you.
-      harness: opencode
+      harness: claude-code
       effort: medium
       maxRetries: 3
       timeout: 25m
@@ -32,6 +32,12 @@ spec:
       description: Runs the overbooking smoke test against the task database and keeps the output. A reviewer confirms rather than investigates.
       shell: mkdir -p $HOME/.origin/artifacts && bun --env-file=.env.local run verify.ts 2>&1 | tee $HOME/.origin/artifacts/verify.log
       timeout: 10m
+    - key: readiness
+      name: Readiness
+      kind: test
+      description: What "ready to ship" means for Cadence. Never blocks; a failing check asks a person whether the change ships anyway.
+      verification: readiness
+      timeout: 5m
     - key: review
       name: Review
       kind: review
@@ -41,7 +47,24 @@ spec:
   edges:
     - { from: implement, to: checks, on: success }
     - { from: checks, to: verify, on: success }
-    - { from: verify, to: review, on: success }
+    - { from: verify, to: readiness, on: success }
+    - { from: readiness, to: review, on: success }
     - { from: review, to: implement, on: findings, label: up to 3 more goes }
     - { from: verify, to: implement, on: findings, label: does not work }
     - { from: checks, to: implement, on: findings, label: does not compile }
+---
+# What "ready to ship" means for Cadence (docs/scorecard.md in Origin). These
+# gates never block a run: a failure raises a readiness.exception decision
+# beside the pull request instead, and a person decides whether it ships.
+apiVersion: origin.dev/v1alpha1
+kind: VerificationProfile
+metadata:
+  name: readiness
+spec:
+  readiness: true
+  gates:
+    # Cadence has no health endpoint yet, so this fails until one exists.
+    - id: health
+      argv: [test, -f, src/app/api/health/route.ts]
+    - id: booking-api
+      argv: [test, -f, src/app/api/book/route.ts]
