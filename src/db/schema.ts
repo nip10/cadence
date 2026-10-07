@@ -12,11 +12,11 @@ import {
 /**
  * Cadence — class booking for a small studio.
  *
- * The schema is deliberately incomplete. Three things a real studio needs are
- * missing on purpose, because each one is a different *kind* of change for an
+ * The app is deliberately incomplete. Three things a real studio needs are
+ * unfinished on purpose, because each one is a different *kind* of change for an
  * agent to make, and the point of this repo is to be worked on:
  *
- *   waitlists            — needs a migration and non-trivial logic
+ *   waitlist promotion   — needs non-trivial booking logic
  *   a cancellation window — pure business rule, no schema change
  *   class packs / credits — needs a migration and touches money
  *
@@ -105,6 +105,33 @@ export const booking = pgTable(
   ]
 );
 
+/** A member waiting for a place on a full session. */
+export const waitlistEntry = pgTable(
+  "waitlist_entry",
+  {
+    id: text("id").primaryKey(),
+    joinedAt: timestamp("joined_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => member.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => classSession.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("waitlist_member_session_idx").on(
+      table.sessionId,
+      table.memberId
+    ),
+    index("waitlist_session_joined_at_idx").on(
+      table.sessionId,
+      table.joinedAt
+    ),
+  ]
+);
+
 export const instructorRelations = relations(instructor, ({ many }) => ({
   templates: many(classTemplate),
 }));
@@ -128,11 +155,13 @@ export const classSessionRelations = relations(
       fields: [classSession.templateId],
       references: [classTemplate.id],
     }),
+    waitlistEntries: many(waitlistEntry),
   })
 );
 
 export const memberRelations = relations(member, ({ many }) => ({
   bookings: many(booking),
+  waitlistEntries: many(waitlistEntry),
 }));
 
 export const bookingRelations = relations(booking, ({ one }) => ({
@@ -142,6 +171,17 @@ export const bookingRelations = relations(booking, ({ one }) => ({
   }),
   session: one(classSession, {
     fields: [booking.sessionId],
+    references: [classSession.id],
+  }),
+}));
+
+export const waitlistEntryRelations = relations(waitlistEntry, ({ one }) => ({
+  member: one(member, {
+    fields: [waitlistEntry.memberId],
+    references: [member.id],
+  }),
+  session: one(classSession, {
+    fields: [waitlistEntry.sessionId],
     references: [classSession.id],
   }),
 }));

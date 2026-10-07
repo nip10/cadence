@@ -75,7 +75,7 @@ Each of these is a different *kind* of change, which is why they were left out.
 
 | Task | Why it is interesting |
 | --- | --- |
-| **Waitlists** | schema migration plus non-trivial promotion logic when someone cancels |
+| **Waitlist operations and promotion** | durable entries are modeled; joining, leaving, and cancellation promotion still need non-trivial logic |
 | **A cancellation window** | pure business rule, no schema change — the boring, safe kind |
 | **Class packs / credits** | migration, and it touches money |
 | **Real auth** | every booking is currently made as `mbr_iris` |
