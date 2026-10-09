@@ -12,18 +12,17 @@ timetable, then start the app in the background.
 
 ```bash
 bun install
-bun run db:start          # Postgres 18 on localhost:5433 (docker compose up -d db)
+bun run db:start          # Postgres 18; publishes CADENCE_DB_PORT (default 5433)
 
 # The app reads DATABASE_URL from .env.local, and Next loads .env.local by itself.
-# (README says `cp .env.example .env.local`, but .env.example is not in the repo,
-# so write the file here instead.)
-cat > .env.local <<'EOF'
-DATABASE_URL=postgresql://postgres:postgres@localhost:5433/cadence
-EOF
+# The db scripts read it too (`bun --env-file=.env.local`), so this one copy is
+# all any of them need.
+cp .env.example .env.local
 
-# drizzle-kit does not read .env.local, and `push` asks for a TTY confirmation an
-# agent shell will not have — so pass the env file explicitly and force it.
-bun --env-file=.env.local run db:push --force
+# `push` asks for a TTY confirmation an agent shell will not have, so pass
+# `--force` through the script. The script itself stays interactive, so a
+# human's `bun run db:push` still gets the confirmation before it changes data.
+bun run db:push -- --force
 bun run db:seed           # 21 sessions over 7 days; the first Reformer class is 7 of 8
 
 # Start the app detached, logging to a file.
@@ -34,9 +33,9 @@ Postgres is accepting connections within a few seconds. `next dev` prints `Ready
 in about 2 seconds and compiles the first request in about 1.5 seconds more, so
 give the app 15 seconds before the Doctor.
 
-`db:start` publishes host port **5433**, so nothing else may already be holding
-it; if something is, publish the db on another port and set `DATABASE_URL` to
-match.
+`db:start` publishes host port **`CADENCE_DB_PORT`** (default 5433), so nothing
+else may already be holding it. If something is, set `CADENCE_DB_PORT` to a free
+port and set the port in `DATABASE_URL` to match.
 
 ## Doctor
 
