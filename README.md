@@ -15,12 +15,16 @@ Class booking for a small studio. Next.js, Drizzle, Postgres, shadcn/ui.
 
 ```bash
 bun install
-bun run db:start          # Postgres 18 on port 5433
+bun run db:start          # Postgres 18; publishes CADENCE_DB_PORT (default 5433)
 cp .env.example .env.local
-bun run db:push
+bun run db:push           # asks before it changes anything; add `-- --force` to skip
 bun run db:seed
 bun run dev               # http://localhost:3000
 ```
+
+`db:start` publishes `CADENCE_DB_PORT`, defaulting to 5433. If that port is
+already taken, set `CADENCE_DB_PORT` to a free one and set the same port in
+`DATABASE_URL` in `.env.local`. Every `db:` script reads `.env.local`.
 
 The seed builds a week of timetable across three slots a real studio sells —
 07:00, 12:15 and 18:30 — and leaves **Reformer Pilates at 7 of 8**, because
